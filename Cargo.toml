@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "fdc-core",
+    "fdc-client-api",
+    "fdc-server-api"
+]
