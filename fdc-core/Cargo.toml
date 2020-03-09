@@ -13,4 +13,9 @@ sha2 = "0.8"
 base64 = "0.11"
 bincode = "1.1"
 rand = "0.7"
+
+rust-crypto = "0.2"
+aes-stream = "0.2"
+
+arrayref = "0.3"
 clear_on_drop = "0.2"

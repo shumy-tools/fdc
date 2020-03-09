@@ -4,11 +4,14 @@ use std::fmt::{Debug, Formatter};
 use serde::{Serialize, Deserialize};
 use core::ops::{Neg, Add, Mul, Sub, AddAssign, MulAssign, SubAssign};
 
+use sha2::Sha512;
 use digest::generic_array::typenum::U64;
 use digest::Digest;
 
 use curve25519_dalek::ristretto::{RistrettoPoint, CompressedRistretto};
 use curve25519_dalek::scalar::Scalar;
+
+use crate::{error, Result};
 
 fn rand_scalar() -> Scalar {
   use rand::prelude::*;
@@ -20,6 +23,9 @@ fn rand_scalar() -> Scalar {
 }
 
 pub const G: PublicKey = PublicKey(curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT);
+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+pub enum KeySize { S128, S192, S256, S512 }
 
 //-----------------------------------------------------------------------------------------------------------
 // SecretKey
@@ -48,12 +54,19 @@ impl SecretKey {
     base64::encode(&self.as_bytes())
   }
 
-  pub fn decode(value: &str) -> SecretKey {
-    let data = base64::decode(value).expect("Unable to decode base64 input!");
-    let mut bytes: [u8; 32] = Default::default();
+  pub fn decode(value: &str) -> Result<SecretKey> {
+    let data = base64::decode(value).map_err(|_| error("SecretKey: Unable to decode base64 input!"))?;
+    if data.len() < 32 {
+      Err("SecretKey: Decoded value is less than 32 bytes!")?
+    }
+
+    let mut bytes = [0u8; 32];
     bytes.copy_from_slice(&data[0..32]);
 
-    SecretKey(Scalar::from_canonical_bytes(bytes).expect("Unable to decode Scalar!"))
+    let secret = Scalar::from_canonical_bytes(bytes)
+      .ok_or_else(|| error("SecretKey: Unable to decode Scalar!"))?;
+    
+    Ok(SecretKey(secret))
   }
 
   pub fn as_bytes(&self) -> &[u8; 32] {
@@ -69,7 +82,7 @@ impl SecretKey {
 
 impl Debug for SecretKey {
   fn fmt(&self, fmt: &mut Formatter<'_>) -> std::fmt::Result {
-    fmt.debug_tuple("PublicKey")
+    fmt.debug_tuple("SecretKey")
       .field(&self.encode())
       .finish()
   }
@@ -169,11 +182,19 @@ impl PublicKey {
     base64::encode(&self.to_bytes())
   }
 
-  pub fn decode(value: &str) -> PublicKey {
-    let data = base64::decode(value).expect("Unable to decode base64 input!");
-    let point = CompressedRistretto::from_slice(&data);
+  pub fn decode(value: &str) -> Result<PublicKey> {
+    let data = base64::decode(value).map_err(|_| error("PublicKey: Unable to decode base64 input!"))?;
+    if data.len() < 32 {
+      Err("PublicKey: Decoded value is less than 32 bytes!")?
+    }
+
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&data[0..32]);
+
+    let key = CompressedRistretto(bytes).decompress()
+      .ok_or_else(|| error("PublicKey: Unable to decompress RistrettoPoint!"))?;
     
-    PublicKey(point.decompress().expect("Unable to decompress RistrettoPoint!"))
+    Ok(PublicKey(key))
   }
 
   pub fn to_bytes(&self) -> [u8; 32] {
@@ -231,8 +252,55 @@ pub struct KeyPair {
 
 impl KeyPair {
   pub fn rand() -> Self {
-    let secret = SecretKey(rand_scalar());
+    let secret = SecretKey::rand();
     let key = &secret * G;
+
     Self { secret, key }
+  }
+
+  pub fn load(secret: &str, key: &str) -> Result<Self> {
+    let secret = SecretKey::decode(secret)?;
+    let key = PublicKey::decode(key)?;
+
+    Ok(Self { secret, key })
+  }
+}
+
+//-----------------------------------------------------------------------------------------------------------
+// LambdaKey
+//-----------------------------------------------------------------------------------------------------------
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+pub struct LambdaKey(Vec<u8>);
+
+impl Drop for LambdaKey {
+  fn drop(&mut self) {
+    self.0.clear();
+  }
+}
+
+impl LambdaKey {
+  pub fn new(alpha: &PublicKey, salt: &[u8]) -> Self {
+    let key = Sha512::new()
+      .chain(alpha.to_bytes())
+      .chain(salt)
+      .result().to_vec();
+    
+    Self(key)
+  }
+
+  pub fn k128(&self) -> &[u8; 16] {
+    arrayref::array_ref!(self.0, 0, 16)
+  }
+
+  pub fn k192(&self) -> &[u8; 24] {
+    arrayref::array_ref!(self.0, 0, 24)
+  }
+
+  pub fn k256(&self) -> &[u8; 32] {
+    arrayref::array_ref!(self.0, 0, 32)
+  }
+
+  pub fn k512(&self) -> &[u8; 64] {
+    arrayref::array_ref!(self.0, 0, 64)
   }
 }
