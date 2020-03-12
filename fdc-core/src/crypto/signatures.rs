@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{KeyPair, PublicKey, SecretKey, G};
+use crate::crypto::{KeyPair, PublicKey, SecretKey, G};
 use sha2::{Digest, Sha512};
 
 //-----------------------------------------------------------------------------------------------------------
@@ -70,18 +70,18 @@ impl ExtSignature {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::rand_string;
+  use crate::rand;
 
   #[test]
   fn test_correct() {
     let kpa = KeyPair::rand();
 
-    let d0 = rand_string(10);
-    let d1 = rand_string(10);
+    let d0 = rand(10);
+    let d1 = rand(10);
 
     let dhash = Sha512::new()
-      .chain(d0.as_bytes())
-      .chain(d1.as_bytes())
+      .chain(d0)
+      .chain(d1)
       .result();
 
     let sig = ExtSignature::sign(&kpa, dhash.as_slice());
@@ -92,20 +92,20 @@ mod tests {
   fn test_incorrect() {
     let kpa = KeyPair::rand();
 
-    let d0 = rand_string(10);
-    let d1 = rand_string(10);
-    let d2 = rand_string(10);
+    let d0 = rand(10);
+    let d1 = rand(10);
+    let d2 = rand(10);
 
     let dhash1 = Sha512::new()
-      .chain(d0.as_bytes())
-      .chain(d1.as_bytes())
+      .chain(&d0)
+      .chain(d1)
       .result();
 
     let sig = ExtSignature::sign(&kpa, dhash1.as_slice());
 
     let dhash2 = Sha512::new()
-      .chain(d0.as_bytes())
-      .chain(d2.as_bytes())
+      .chain(&d0)
+      .chain(d2)
       .result();
 
     assert!(sig.verify(dhash2.as_slice()) == false);

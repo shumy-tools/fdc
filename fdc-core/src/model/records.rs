@@ -2,7 +2,7 @@ use sha2::{Digest, Sha512};
 use serde::{Serialize, Deserialize};
 use std::io::{Read, Write};
 
-use crate::Result;
+use crate::{rand, Result};
 use crate::crypto::*;
 
 pub fn salt(id: &str, table: &str) -> Vec<u8> {
@@ -19,7 +19,7 @@ pub fn salt(id: &str, table: &str) -> Vec<u8> {
 //-----------------------------------------------------------------------------------------------------------
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct RDataRef {
-  pub size: KeySize,
+  pub ksize: KeySize,
   pub dn: Vec<u8>,
   pub hfile: Vec<u8>
 }
@@ -33,20 +33,35 @@ pub struct RData {
   pub dref: RDataRef
 }
 
+impl RData {
+  pub fn head(ksize: KeySize, hfile: &[u8]) -> Self {
+    let dn = rand(ksize.size());
+    Self { lprev: None, dref: RDataRef { ksize: KeySize::S128, dn, hfile: hfile.into() } }
+  }
+
+  pub fn tail(ksize: KeySize, lprev: LambdaKey, hfile: &[u8]) -> Self {
+    let dn = rand(ksize.size());
+    Self { lprev: Some(lprev), dref: RDataRef { ksize: KeySize::S128, dn, hfile: hfile.into() } }
+  }
+}
+
+//-----------------------------------------------------------------------------------------------------------
+// REncData
+//-----------------------------------------------------------------------------------------------------------
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub struct REncData {
   pub kn: PublicKey,
-  data: Vec<u8>
+  ciphertext: Vec<u8>
 }
 
 impl REncData {
-  pub fn new(ekey: &PublicKey, salt: &[u8], cd: &RData) -> (LambdaKey, Self) {
+  fn new(ekey: &PublicKey, salt: &[u8], rd: &RData) -> (LambdaKey, Self) {
     let k = SecretKey::rand();
     let alpha = &k * ekey;
     let lambda = LambdaKey::new(&alpha, salt);
 
     // E_{lambda} [lprev, dn, hfile]
-    let from = bincode::serialize(cd).unwrap();
+    let from = bincode::serialize(rd).unwrap();
     let mut to = Vec::new();
     {
       // encryption should not fail
@@ -54,14 +69,14 @@ impl REncData {
       ecryptor.write_all(from.as_slice()).unwrap();
     }
 
-    (lambda, Self { kn: (k * G), data: to })
+    (lambda, Self { kn: (k * G), ciphertext: to })
   }
 
-  pub fn data(&self, lambda: &LambdaKey) -> Result<RData> {
+  fn data(&self, lambda: &LambdaKey) -> Result<RData> {
     // D_{lambda} [lprev, dn, hfile]
     let mut to = Vec::new();
     {
-      let mut decryptor = decryptor(EncryptScheme::AesCbc128, lambda, self.data.as_slice())?;
+      let mut decryptor = decryptor(EncryptScheme::AesCbc128, lambda, self.ciphertext.as_slice())?;
       decryptor.read_to_end(&mut to)?;
     }
 
@@ -76,13 +91,17 @@ impl REncData {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Record {
   pub hprev: Vec<u8>,
-  pub data: REncData,
+  data: REncData,
   sig: ExtSignature
 }
 
 impl Record {
   pub fn owner(&self) -> &PublicKey {
     &self.sig.key
+  }
+
+  pub fn data(&self, lambda: &LambdaKey) -> Result<RData> {
+    self.data.data(lambda)
   }
 
   pub fn head(keyp: &KeyPair, ekey: &PublicKey, salt: &[u8], rd: RData) -> (LambdaKey, Self) {
@@ -127,18 +146,18 @@ mod tests {
 
     #[test]
     fn record_write_load() {
-        let ekp = KeyPair::rand(); // master key-pair
-        let skp = KeyPair::rand(); // source key-pair
+      let salt = salt("subject-id", "table-id");
 
-        let salt = salt("subject-id", "table-id");
+      let ekp = KeyPair::rand(); // master key-pair
+      let skp = KeyPair::rand(); // source key-pair
 
-        let cd1 = RData { lprev: None, dref: RDataRef { size: KeySize::S128, dn: b"encryption123456".to_vec(), hfile: b"file-url".to_vec() } };
-        let (_, r1) = Record::head(&skp, &ekp.key, &salt, cd1.clone());
-        assert!(r1.check().is_ok());
+      let rd1 = RData::head(KeySize::S128, b"data-url");
+      let (_, r1) = Record::head(&skp, &ekp.key, &salt, rd1.clone());
+      assert!(r1.check().is_ok());
 
-        let alpha = ekp.secret * &r1.data.kn;
-        let lambda = LambdaKey::new(&alpha, &salt);
-        let cd2 = r1.data.data(&lambda).unwrap();
-        assert!(cd1 == cd2);
+      let alpha = ekp.secret * &r1.data.kn;
+      let lambda = LambdaKey::new(&alpha, &salt);
+      let rd2 = r1.data(&lambda).unwrap();
+      assert!(rd1 == rd2);
     }
   }

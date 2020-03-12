@@ -27,6 +27,17 @@ pub const G: PublicKey = PublicKey(curve25519_dalek::constants::RISTRETTO_BASEPO
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 pub enum KeySize { S128, S192, S256, S512 }
 
+impl KeySize {
+  pub fn size(&self) -> usize {
+    match self {
+      KeySize::S128 => 128,
+      KeySize::S192 => 192,
+      KeySize::S256 => 256,
+      KeySize::S512 => 512
+    }
+  }
+}
+
 //-----------------------------------------------------------------------------------------------------------
 // SecretKey
 //-----------------------------------------------------------------------------------------------------------
